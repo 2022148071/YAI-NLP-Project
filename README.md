@@ -1,4 +1,4 @@
-# YAI-NLP-Project
+# NeuLoRA
 
 LangGraph 기반 개선 RAG 튜터 시스템입니다. PDF 문서 검색, 관련성 평가, 필요 시 웹 검색을 거쳐 답변을 생성합니다.
 
@@ -14,7 +14,7 @@ LangGraph 기반 개선 RAG 튜터 시스템입니다. PDF 문서 검색, 관련
 ```
 YAI-NLP/
 ├── LangGraph/
-│   └── LangGraph.ipynb   # 그래프 정의, 노드(retrieve, relevance_check, web_search, llm_answer), 실행
+│   └── LangGraph.ipynb   # 그래프 정의, 노드(retrieve, relevance_check, web_search, llm_answer), 실행(2026/02/09 retrieve_or_not함수 추가가)
 ├── rag/
 │   ├── base.py           # RetrievalChain (임베딩, 벡터스토어, 리트리버, LLM, 프롬프트, 체인)
 │   ├── pdf.py            # PDFRetrievalChain (PDF 로더, 텍스트 분할)
