@@ -11,6 +11,58 @@ from langchain_classic import hub
 from langchain_huggingface import HuggingFaceEmbeddings, ChatHuggingFace, HuggingFaceEndpoint
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+# ─── 임베딩 설정 (ingest.py, chroma.py 등에서도 이 설정을 공유) ────────
+# ⚠️ 적재(ingest)와 검색(retrieve) 시 반드시 동일한 모델을 사용해야 합니다!
+EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델명
+EMBEDDING_DEVICE = "auto"                         # "cpu" / "cuda" / "auto"
+
+
+def create_embedding_local():
+    """
+    [로컬 방식] 모델을 다운로드하여 로컬에서 실행
+    - 최초 실행 시 ~/.cache/huggingface/hub/ 에 모델 다운로드
+    - 이후 캐시에서 로드 (오프라인 가능)
+    - GPU 활용 가능 → 빠른 임베딩
+    """
+    return HuggingFaceEmbeddings(
+        model_name=EMBEDDING_MODEL,
+        model_kwargs={"device": EMBEDDING_DEVICE},
+        encode_kwargs={"normalize_embeddings": True},
+    )
+
+
+def create_embedding_api():
+    """
+    [API 방식] HuggingFace Inference API를 호출하여 임베딩 생성
+    - 모델을 로컬에 다운로드하지 않음
+    - HF_API_KEY 환경변수 필요
+    - 네트워크 필요, 무료 티어는 속도 제한 있음
+    """
+    from langchain_huggingface import HuggingFaceEndpointEmbeddings
+
+    api_token = os.environ.get("HF_API_KEY")
+    if not api_token:
+        raise ValueError("HF_API_KEY 환경 변수가 설정되지 않았습니다.")
+
+    return HuggingFaceEndpointEmbeddings(
+        model=EMBEDDING_MODEL,
+        huggingfacehub_api_token=api_token,
+    )
+
+
+# ─── 임베딩 방식 선택 ─────────────────────────────────────────────
+# 환경변수 EMBEDDING_MODE로 제어: "local" (기본) 또는 "api"
+def create_embedding_auto():
+    """환경변수 EMBEDDING_MODE에 따라 로컬/API 방식 자동 선택"""
+    mode = os.environ.get("EMBEDDING_MODE", "local").lower()
+    if mode == "api":
+        print(f"🌐 임베딩: API 방식 ({EMBEDDING_MODEL})")
+        return create_embedding_api()
+    else:
+        print(f"💻 임베딩: 로컬 방식 ({EMBEDDING_MODEL}, device={EMBEDDING_DEVICE})")
+        return create_embedding_local()
+
+
 class RetrievalChain(ABC):
     def __init__(self):
         self.source_uri = None
@@ -32,16 +84,11 @@ class RetrievalChain(ABC):
 
     def create_embedding(self):
         """
-        Embeddings 생성
-        - OpenAIEmbeddings 대신 HuggingFaceEmbeddings 사용
-        - model_name: 한국어 성능이 좋은 모델 (jhgan/ko-sroberta-multitask)
-        - device: 'cpu' (Mac은 'mps', NVIDIA GPU는 'cuda'로 변경 가능)
+        Embeddings 생성 (로컬/API 자동 선택)
+        - 환경변수 EMBEDDING_MODE="api" → HF Inference API 호출 (다운로드 없음)
+        - 환경변수 EMBEDDING_MODE="local" 또는 미설정 → 로컬 다운로드 후 실행
         """
-        return HuggingFaceEmbeddings(
-            model_name="jhgan/ko-sroberta-multitask",
-            model_kwargs={'device': 'cpu'}, 
-            encode_kwargs={'normalize_embeddings': True}
-        )
+        return create_embedding_auto()
 
     def create_vectorstore(self, split_docs):
         """VectorStore 생성 (FAISS)"""
