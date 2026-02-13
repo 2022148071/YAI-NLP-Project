@@ -1,3 +1,4 @@
+langchain-chroma
 langchain-core
 langchain-community
 langchain-text-splitters

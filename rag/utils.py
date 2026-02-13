@@ -18,6 +18,7 @@ def format_docs(docs):
     """
     lines = []
     for doc in docs:
+        #metadata가 None인 경우를 대비해서 최종적으로 항상 dict{}가 되도록 보장
         meta = getattr(doc, "metadata", {}) or {}
         source = (
             meta.get("source")
