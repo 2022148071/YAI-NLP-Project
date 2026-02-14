@@ -14,3 +14,4 @@ sentence_transformers
 langgraph
 ipywidgets
 tavily-python
+streamlit
