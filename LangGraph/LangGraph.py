@@ -343,8 +343,8 @@ def contextualize(state: GraphState) -> GraphState:
     keyword_recall = any(
         kw in question
         for kw in [
-            "그때", "저번에", "아까", "이전", "기억나",
-            "위에", "그거", "내 생일", "내 정보",
+            "그때", "저번에", "아까", "이전", "기억나", "그게", "이게",
+            "위에", "그거", "내 생일", "내 정보", "이건", "그건",
         ]
     )
     ambiguous_recall = _looks_ambiguous(question)
