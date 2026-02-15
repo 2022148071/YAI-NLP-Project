@@ -78,8 +78,11 @@ COLLECTION_CHAT_RAW = "chat_history_raw"  # 대화 원본 저장
 COLLECTION_CHAT_SUMMARY = "chat_history_summarized"  # 대화 요약 저장
 
 # LLM 모델 식별자
-ROUTER_MODEL = "meta-llama/Llama-3.1-8B-Instruct"  # 라우팅·판단·요약용
-CHAIN_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # 답변 생성용 (rag.base)
+# ROUTER_MODEL = "meta-llama/Llama-3.1-8B-Instruct"  # 라우팅·판단·요약용
+# CHAIN_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # 답변 생성용 (rag.base)
+
+ROUTER_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 라우팅·판단·요약용
+CHAIN_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 답변 생성용 (rag.base)
 EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델
 
 MAX_CHARS_PER_DOC = 1500  # 웹 검색 결과 요약 임계치 (≈1000 토큰)
@@ -155,7 +158,7 @@ def _init_chat_model():
     llm = HuggingFaceEndpoint(
         repo_id=ROUTER_MODEL,
         task="text-generation",
-        temperature=0.0,
+        temperature=0.7,
         max_new_tokens=512,
     )
     _chat_hf = ChatHuggingFace(llm=llm)
@@ -273,7 +276,7 @@ def _looks_ambiguous(q: str) -> bool:
     if not q:
         return False
     ambiguous = [
-        "그거", "그것", "이거", "저거", "그때", "저번", "아까",
+        "그거", "그것", "그게", "이게", "이거", "저거", "그때", "저번", "아까",
         "그 내용", "그 이야기", "기억나", "기억해", "다시", "이어",
         "더 자세히", "뭐였지",
     ]
@@ -343,8 +346,8 @@ def contextualize(state: GraphState) -> GraphState:
     keyword_recall = any(
         kw in question
         for kw in [
-            "그때", "저번에", "아까", "이전", "기억나",
-            "위에", "그거", "내 생일", "내 정보",
+            "그때", "저번에", "아까", "이전", "기억나", "그게", "이게",
+            "위에", "그거", "내 생일", "내 정보", "이건", "그건",
         ]
     )
     ambiguous_recall = _looks_ambiguous(question)
