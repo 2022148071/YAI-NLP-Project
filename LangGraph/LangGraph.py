@@ -78,8 +78,11 @@ COLLECTION_CHAT_RAW = "chat_history_raw"  # 대화 원본 저장
 COLLECTION_CHAT_SUMMARY = "chat_history_summarized"  # 대화 요약 저장
 
 # LLM 모델 식별자
-ROUTER_MODEL = "meta-llama/Llama-3.1-8B-Instruct"  # 라우팅·판단·요약용
-CHAIN_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # 답변 생성용 (rag.base)
+# ROUTER_MODEL = "meta-llama/Llama-3.1-8B-Instruct"  # 라우팅·판단·요약용
+# CHAIN_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # 답변 생성용 (rag.base)
+
+ROUTER_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 라우팅·판단·요약용
+CHAIN_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 답변 생성용 (rag.base)
 EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델
 
 MAX_CHARS_PER_DOC = 1500  # 웹 검색 결과 요약 임계치 (≈1000 토큰)
