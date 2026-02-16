@@ -4,6 +4,7 @@ import os
 
 # LangChain Core 및 Community
 from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda
 from langchain_community.vectorstores import FAISS
 from langchain_classic import hub
 
@@ -109,13 +110,17 @@ class RetrievalChain(ABC):
         - HuggingFaceEndpoint: 무료 추론 API 사용
         - repo_id: HuggingFaceH4/zephyr-7b-beta (무료, 고성능, 승인 불필요)
         """
+        provider = os.environ.get("LLM_PROVIDER", "huggingface").lower()
+        if provider in {"gemini", "genie"}:
+            return self.create_model_genie()
+
         # 환경 변수에서 토큰 확인
         api_token = os.environ.get("HF_API_KEY")
         if not api_token:
             raise ValueError("HF_API_KEY 환경 변수가 설정되지 않았습니다.")
 
         llm = HuggingFaceEndpoint(
-            repo_id="meta-llama/Meta-Llama-3-8B-Instruct",
+            repo_id="Qwen/Qwen2.5-14B-Instruct",
             #repo_id="HuggingFaceH4/zephyr-7b-beta",
             task="conversational",
             max_new_tokens=512,
@@ -124,6 +129,59 @@ class RetrievalChain(ABC):
         )
         return ChatHuggingFace(llm=llm)
 
+    def create_model_genie(self):
+        """
+        Gemini 모델 생성 (LangChain Runnable 호환)
+        - 반환값은 `prompt | model | StrOutputParser()` 체인에 바로 연결 가능
+        - 환경변수:
+            * GEMINI_API_KEY: 필수
+            * GEMINI_MODEL: 선택 (기본: gemini-2.0-flash)
+        """
+        try:
+            from google import genai
+        except Exception as e:
+            raise ImportError(
+                "google-genai 패키지가 필요합니다. `pip install google-genai` 후 다시 시도하세요."
+            ) from e
+
+        gemini_api_token = os.environ.get("GEMINI_API_KEY")
+        if not gemini_api_token:
+            raise ValueError("GEMINI_API_KEY 환경 변수가 설정되지 않았습니다.")
+
+        model_name = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+        client = genai.Client(api_key=gemini_api_token)
+        print(f"🌐 Gemini 모델: {model_name}")
+        def _to_gemini_text(prompt_input):
+            """
+            ChatPromptValue / 메시지 리스트 / 문자열 입력을 Gemini에 넣을 텍스트로 변환.
+            """
+            if hasattr(prompt_input, "to_messages"):
+                messages = prompt_input.to_messages()
+            elif isinstance(prompt_input, list):
+                messages = prompt_input
+            else:
+                return str(prompt_input)
+
+            lines = []
+            for msg in messages:
+                role = getattr(msg, "type", "user")
+                role = {"human": "user", "ai": "assistant"}.get(role, role)
+                content = getattr(msg, "content", msg)
+                lines.append(f"[{role}] {content}")
+            return "\n".join(lines)
+
+        def _invoke_gemini(prompt_input):
+            prompt_text = _to_gemini_text(prompt_input)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt_text,
+            )
+            # StrOutputParser가 처리할 수 있도록 문자열 반환
+            return (getattr(response, "text", None) or "").strip()
+
+        return RunnableLambda(_invoke_gemini)
+
+    
     def create_prompt(self):
         """Prompt Template 로드"""
         # 기존 프롬프트 사용 (필요시 모델에 맞춰 변경 가능)

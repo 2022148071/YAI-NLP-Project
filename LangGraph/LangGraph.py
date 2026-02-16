@@ -28,6 +28,7 @@ stream.py 에서 import 하여 Streamlit 데모에 활용합니다.
 # ============================================================
 import os
 import sys
+import time
 import json
 import re
 import uuid
@@ -82,7 +83,7 @@ COLLECTION_CHAT_SUMMARY = "chat_history_summarized"  # 대화 요약 저장
 # CHAIN_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # 답변 생성용 (rag.base)
 
 ROUTER_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 라우팅·판단·요약용
-CHAIN_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 답변 생성용 (rag.base)
+CHAIN_MODEL = "gemini-3-flash-preview"  # 답변 생성용 (rag.base)
 EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델
 
 MAX_CHARS_PER_DOC = 1500  # 웹 검색 결과 요약 임계치 (≈1000 토큰)
@@ -133,6 +134,7 @@ _chat_hf = None  # 라우팅·판단·요약용 LLM
 _embeddings = None  # 임베딩 모델 인스턴스
 _app = None  # 컴파일된 LangGraph 앱
 _initialized = False  # 초기화 완료 플래그
+_answer_model_used: str | None = None  # 실제 체인 생성에 사용된 답변 모델명
 
 # ============================================================
 # 8. 초기화 함수
@@ -178,8 +180,10 @@ def _init_rag_chain(
     k: int = 10,
 ):
     """ChromaDB 기반 RAG 체인 (retriever + chain) 초기화"""
-    global _retriever, _chain
+    global _retriever, _chain, _answer_model_used
     _log("🚀 ChromaDB 기반 RAG 체인 생성 시작...")
+    _answer_model_used = _answer_model_name()
+    _log(f"🤖 답변 체인 모델 확정: {_answer_model_used}")
     rag = ChromaRetrievalChain(
         persist_directory=persist_directory,
         collection_name=collection_name,
@@ -304,6 +308,17 @@ def _conversation_only(messages) -> list:
     return conv
 
 
+def _answer_model_name() -> str:
+    """
+    llm_answer에서 실제로 사용될 답변 모델명을 반환.
+    rag.base.RetrievalChain.create_model() 선택 로직과 동일.
+    """
+    provider = os.environ.get("LLM_PROVIDER", "huggingface").lower()
+    if provider in {"gemini", "genie"}:
+        return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+    return "Qwen/Qwen2.5-14B-Instruct"
+
+
 def _summarize_if_long(content: str, max_chars: int = MAX_CHARS_PER_DOC) -> str:
     """텍스트가 max_chars 를 초과하면 _chat_hf 로 요약"""
     if len(content) <= max_chars:
@@ -324,6 +339,27 @@ def _summarize_if_long(content: str, max_chars: int = MAX_CHARS_PER_DOC) -> str:
 # ============================================================
 # 11. 노드 함수
 # ============================================================
+
+
+def _timed_node(node_func, node_name: str):
+    """
+    노드 진입 시·퇴장 시 시간을 측정하는 래퍼.
+    진입 시 t0 기록 → 원본 노드 실행 → 퇴장 시 소요 시간 로그.
+    """
+    def wrapped(state: GraphState) -> GraphState:
+        t0 = time.perf_counter()
+        _log(f"⏱️ [{node_name}] 진입 @ {t0:.3f}s")
+        try:
+            out = node_func(state)
+            t1 = time.perf_counter()
+            elapsed = t1 - t0
+            _log(f"⏱️ [{node_name}] 퇴장 @ {t1:.3f}s (소요: {elapsed:.3f}s)")
+            return out
+        except Exception as e:
+            t1 = time.perf_counter()
+            _log(f"⏱️ [{node_name}] 예외로 퇴장 @ {t1:.3f}s (소요: {(t1 - t0):.3f}s) — {e}")
+            raise
+    return wrapped
 
 
 def contextualize(state: GraphState) -> GraphState:
@@ -456,6 +492,7 @@ def llm_answer(state: GraphState) -> GraphState:
     question = state["question"]
     context = state.get("context", "")
     chat_history = state.get("messages", [])
+    _log(f"🤖 llm_answer 모델: {_answer_model_name()}")
 
     try:
         response = _chain.invoke(
@@ -712,13 +749,20 @@ def build_app():
 
     workflow = StateGraph(GraphState)
 
-    # ── 노드 등록 ──
-    workflow.add_node("contextualize", contextualize)
-    workflow.add_node("save_memory", save_memory)
-    workflow.add_node("retrieve", retrieve)
-    workflow.add_node("llm_answer", llm_answer)
-    workflow.add_node("relevance_check", relevance_check)
-    workflow.add_node("web_search", web_search)
+    # # ── 노드 등록 ──
+    # workflow.add_node("contextualize", contextualize)
+    # workflow.add_node("save_memory", save_memory)
+    # workflow.add_node("retrieve", retrieve)
+    # workflow.add_node("llm_answer", llm_answer)
+    # workflow.add_node("relevance_check", relevance_check)
+    # workflow.add_node("web_search", web_search)
+    # ── 노드 등록 (진입/퇴장 시간 측정 래퍼 적용) ──
+    workflow.add_node("contextualize", _timed_node(contextualize, "contextualize"))
+    workflow.add_node("save_memory", _timed_node(save_memory, "save_memory"))
+    workflow.add_node("retrieve", _timed_node(retrieve, "retrieve"))
+    workflow.add_node("llm_answer", _timed_node(llm_answer, "llm_answer"))
+    workflow.add_node("relevance_check", _timed_node(relevance_check, "relevance_check"))
+    workflow.add_node("web_search", _timed_node(web_search, "web_search"))
 
     # ── 진입점 ──
     workflow.set_entry_point("contextualize")
@@ -799,6 +843,14 @@ def query(question: str, thread_id: str | None = None) -> Dict[str, Any]:
 def get_app():
     """컴파일된 LangGraph 앱 인스턴스 반환"""
     return _app
+
+
+def get_answer_model_name() -> str:
+    """
+    답변 체인에 실제 사용 중인 모델명 반환.
+    초기화 전이면 현재 환경변수 기준 예상 모델명을 반환.
+    """
+    return _answer_model_used or _answer_model_name()
 
 
 def is_initialized() -> bool:

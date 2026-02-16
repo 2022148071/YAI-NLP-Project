@@ -56,7 +56,7 @@ body {
 
 /* ── 사이드바 토글 (모바일) ── */
 .sidebar-toggle {
-  display: none;
+  display: block;
   position: fixed;
   top: 12px;
   left: 12px;
@@ -68,12 +68,6 @@ body {
   font-size: 1.2rem;
   cursor: pointer;
   box-shadow: var(--shadow-sm);
-}
-
-@media (max-width: 768px) {
-  .sidebar-toggle {
-    display: block;
-  }
 }
 
 /* ============================================================
@@ -110,6 +104,7 @@ body {
 }
 
 .sidebar-header {
+  position: relative;
   padding: 20px 20px 12px;
   border-bottom: 1px solid var(--border);
 }
@@ -129,7 +124,7 @@ body {
 }
 
 .sidebar-close {
-  display: none;
+  display: block;
   position: absolute;
   top: 12px;
   right: 12px;
@@ -138,12 +133,6 @@ body {
   font-size: 1.3rem;
   cursor: pointer;
   color: var(--text-muted);
-}
-
-@media (max-width: 768px) {
-  .sidebar-close {
-    display: block;
-  }
 }
 
 /* ── 사이드바 섹션 ── */

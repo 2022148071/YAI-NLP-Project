@@ -16,11 +16,11 @@ export default function Sidebar({ open, status, documents, onReset, onClose }) {
     <aside className={`sidebar${open ? "" : " closed"}`}>
       {/* ── 헤더 ── */}
       <div className="sidebar-header">
-        <h2>🧭 RAG Chat</h2>
-        <p>LangGraph 기반 멀티턴 RAG 챗봇</p>
-        <button className="sidebar-close" onClick={onClose}>
+        <h2>🧭 NeuLoRA</h2>
+        <p>The Thinking tutor that connects to your neuron</p>
+        {/* <button className="sidebar-close" onClick={onClose}>
           ✕
-        </button>
+        </button> */}
       </div>
 
       {/* ── 디버깅 : 모델 정보 ── */}

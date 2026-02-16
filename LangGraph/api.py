@@ -135,7 +135,7 @@ async def status():
     """시스템 상태 (모델명, 연결 상태) 반환"""
     return StatusResponse(
         models={
-            "answer_llm": lg.CHAIN_MODEL,
+            "answer_llm": lg.get_answer_model_name(),
             "router_llm": lg.ROUTER_MODEL,
             "embedding": lg.EMBEDDING_MODEL,
         },

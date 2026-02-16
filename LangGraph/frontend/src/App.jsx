@@ -148,13 +148,13 @@ export default function App() {
   // ── 렌더링 ──
   return (
     <div className="app">
-      {/* 사이드바 토글 (모바일) */}
+      {/* 사이드바 토글 */}
       <button
         className="sidebar-toggle"
         onClick={() => setSidebarOpen((o) => !o)}
-        aria-label="사이드바 토글"
+        aria-label={sidebarOpen ? "사이드바 닫기" : "사이드바 열기"}
       >
-        ☰
+        {sidebarOpen ? "✕" : "☰"}
       </button>
 
       <Sidebar
