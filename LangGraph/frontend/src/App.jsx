@@ -3,6 +3,8 @@ import Sidebar from "./components/Sidebar";
 import ChatArea from "./components/ChatArea";
 import ToastContainer from "./components/Toast";
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * App – 최상위 레이아웃
  *
@@ -24,6 +26,38 @@ export default function App() {
   // 시스템 상태 (디버깅 패널용)
   const [status, setStatus] = useState(null);
   const [documents, setDocuments] = useState([]);
+
+  // 어시스턴트 답변을 점진 출력(스트리밍 UI)
+  const streamAssistantText = useCallback(async (text) => {
+    const safeText = String(text ?? "");
+    const chars = Array.from(safeText);
+    const total = chars.length;
+    const chunkSize = total > 500 ? 8 : total > 250 ? 5 : 2;
+
+    setMessages((prev) => [...prev, { role: "assistant", content: "", streaming: true }]);
+
+    for (let i = 0; i < total; i += chunkSize) {
+      const partial = chars.slice(0, i + chunkSize).join("");
+      setMessages((prev) => {
+        const next = [...prev];
+        const lastIdx = next.length - 1;
+        if (lastIdx >= 0 && next[lastIdx].role === "assistant") {
+          next[lastIdx] = { ...next[lastIdx], content: partial, streaming: true };
+        }
+        return next;
+      });
+      await sleep(16);
+    }
+
+    setMessages((prev) => {
+      const next = [...prev];
+      const lastIdx = next.length - 1;
+      if (lastIdx >= 0 && next[lastIdx].role === "assistant") {
+        next[lastIdx] = { ...next[lastIdx], streaming: false };
+      }
+      return next;
+    });
+  }, []);
 
   // ── 토스트 헬퍼 ──
   const addToast = useCallback((msg) => {
@@ -85,11 +119,8 @@ export default function App() {
         // thread_id 기억
         if (data.thread_id) setThreadId(data.thread_id);
 
-        // 어시스턴트 답변 추가
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: data.answer },
-        ]);
+        // 어시스턴트 답변 스트리밍 출력
+        await streamAssistantText(data.answer);
 
         // 서버 로그 토스트
         showLogs(data.logs);
@@ -102,7 +133,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [loading, threadId, showLogs]
+    [loading, threadId, showLogs, streamAssistantText]
   );
 
   // ── 파일 업로드 ──

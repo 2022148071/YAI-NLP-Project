@@ -327,6 +327,49 @@ body {
   word-break: break-word;
 }
 
+.markdown-body {
+  white-space: normal;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p {
+  margin: 0.35rem 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.4rem 0 0.4rem 1.2rem;
+}
+
+.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.85em;
+}
+
+.markdown-body pre {
+  background: rgba(0, 0, 0, 0.08);
+  padding: 0.6rem;
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.bubble.user .markdown-body pre {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.markdown-body .katex-display {
+  margin: 0.65rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .bubble.user {
   background: var(--user-bg);
   color: var(--user-text);
