@@ -116,8 +116,8 @@ npm run dev
 
 ## 사용 모델
 
-- **라우팅·판단·요약**: `meta-llama/Llama-3.1-8B-Instruct`
-- **답변 생성(RAG)**: `meta-llama/Meta-Llama-3-8B-Instruct`
+- **라우팅·판단·요약**: `Qwen/Qwen2.5-14B-Instruct`
+- **답변 생성(RAG)**: `Qwen/Qwen2.5-14B-Instruct`
 - **임베딩**: `BAAI/bge-m3`
 
 (Hugging Face Inference API 또는 동일 인터페이스 사용)
