@@ -1,45 +1,89 @@
-# NeuLoRA - The Thinking tutor that connects to your neuron
+# NeuLoRA 🧠✨
+**The Thinking Tutor that Connects to Your Neuron**
 
-LangGraph 기반 **RAG(Retrieval-Augmented Generation)** 챗봇 프로젝트입니다.  
-문서(PDF/TXT)를 벡터 DB에 적재하고, 대화 맥락·문서 검색·웹 검색을 조합해 답변을 생성합니다.
+LangGraph 기반의 멀티턴 RAG 챗봇 프로젝트입니다.  
+PDF/TXT 문서를 적재하고, 대화 맥락 + 벡터 검색 + (필요 시) 웹 검색을 조합해 답변을 생성합니다.
 
-## 주요 기능
+---
 
-- **RAG 파이프라인**: ChromaDB + LangChain/LangGraph로 문서 검색 후 LLM 답변 생성
-- **대화 맥락 활용**: "그때 말한 거", "아까 질문" 등 모호한 질문 시 이전 대화 요약 검색으로 질문 재작성
-- **검색 라우팅**: 질문 유형에 따라 문서 검색 필요 여부를 LLM이 판단
-- **관련성 검사**: 검색된 문서가 질문과 무관하면 Tavily 웹 검색으로 보완
-- **대화 메모리**: 일정 턴 이상 대화 시 요약을 별도 컬렉션에 저장해 장기 기억 활용
-- **다양한 실행 환경**: Jupyter 노트북, Streamlit 데모, FastAPI + React 웹 앱
+## 🚀 핵심 기능
 
-## 프로젝트 구조
+- 📚 **문서 기반 질의응답(RAG)**: ChromaDB + LangChain/LangGraph 기반 검색-생성 파이프라인
+- 🧭 **질문 라우팅**: 질문 특성에 따라 검색 필요 여부를 그래프에서 분기
+- 🧪 **관련성 점검**: 검색 문맥이 부적절할 경우 웹 검색(Tavily)로 보강
+- 🧠 **대화 기억 저장**: 대화 누적 시 요약 메모리를 별도 컬렉션에 저장
+- 💬 **웹 챗 UI**: FastAPI + React(Vite) 기반 실시간 질의응답 화면
+- 🧮 **수식 렌더링 지원**: 프론트에서 KaTeX 기반 LaTeX 표시
 
-```
+---
+
+## 🗂️ 프로젝트 구조 (명확 버전)
+
+```text
 YAI-NLP/
-├── LangGraph/
-│   ├── LangGraph.py      # RAG 파이프라인 모듈 (LangGraph 그래프 정의)
-│   ├── LangGraph.ipynb   # 실험용 노트북
-│   ├── api.py            # FastAPI 백엔드 (REST API)
-│   ├── stream.py         # Streamlit 데모
-│   ├── chroma_db/        # ChromaDB 저장 디렉터리 (자동 생성)
-│   └── frontend/         # React + Vite 프론트엔드
-├── rag/                  # RAG 공통 모듈
-│   ├── base.py           # 임베딩·체인 기본
-│   ├── chroma.py         # ChromaDB 검색 체인
-│   ├── ingest.py         # 문서 적재 (PDF/TXT)
-│   ├── pdf.py            # PDF 처리
-│   ├── utils.py          # 유틸리티
-│   └── graph_utils.py    # 그래프·세션 유틸
-├── requirements.txt
-└── README.md
+├─ LangGraph/
+│  ├─ LangGraph.py                 # 메인 그래프 파이프라인 (노드/분기/실행)
+│  ├─ api.py                       # FastAPI 서버 (chat/upload/status/documents/reset)
+│  ├─ stream.py                    # Streamlit 데모 엔트리
+│  ├─ LangGraph.ipynb              # 실험/프로토타이핑 노트북
+│  ├─ chroma_db/                   # Chroma 로컬 영속 저장소
+│  └─ frontend/                    # React + Vite 프론트엔드
+│     ├─ src/
+│     │  ├─ App.jsx                # 앱 상태/요청/스트리밍 UI 로직
+│     │  ├─ App.css                # 전체 스타일
+│     │  ├─ main.jsx               # 앱 부트스트랩 (KaTeX CSS 포함)
+│     │  └─ components/
+│     │     ├─ ChatArea.jsx        # 메시지 렌더/입력/업로드 UI
+│     │     ├─ Sidebar.jsx         # 상태/문서/리셋 패널
+│     │     └─ Toast.jsx           # 토스트 컴포넌트
+│     ├─ package.json
+│     └─ vite.config.js
+├─ rag/
+│  ├─ base.py                      # 공통 체인/임베딩/프롬프트 구성
+│  ├─ chroma.py                    # Chroma 연결형 RetrievalChain
+│  ├─ ingest.py                    # PDF/TXT 적재 파이프라인
+│  ├─ pdf.py                       # PDF 처리 유틸
+│  ├─ utils.py                     # 문서 포맷팅 유틸
+│  └─ graph_utils.py               # 그래프 실행/세션 도우미
+├─ requirements.txt
+└─ README.md
 ```
 
-## 환경 설정
+---
 
-### 1. Python 환경
+## ⚙️ 기술 스택
 
-- Python 3.10+ 권장
-- 가상환경 생성 후 의존성 설치:
+- **Backend**: FastAPI, LangGraph, LangChain
+- **Frontend**: React, Vite
+- **Vector DB**: ChromaDB
+- **LLM/Embedding**: Hugging Face Endpoint + `Qwen/Qwen2.5-14B-Instruct`, `BAAI/bge-m3`
+- **Math Rendering**: KaTeX (`react-markdown` + `remark-math` + `rehype-katex`)
+
+---
+
+## 🔐 환경 변수 설정
+
+루트의 `.env` 파일에 아래 값을 설정하세요.
+
+| 변수 | 필수 | 설명 |
+|---|---|---|
+| `HF_API_KEY` | ✅ | Hugging Face API 토큰 (LLM/임베딩 호출) |
+| `TAVILY_API_KEY` | 선택 | 웹 검색 보강 기능 사용 시 필요 |
+| `EMBEDDING_MODE` | 선택 | `local`(기본) / `api` |
+
+예시:
+
+```env
+HF_API_KEY=hf_xxxxxxxxxxxx
+TAVILY_API_KEY=tvly-xxxxxxxxxxxx
+EMBEDDING_MODE=local
+```
+
+---
+
+## 🏃 실행 방법
+
+### 1) Python 의존성 설치
 
 ```bash
 python -m venv venv
@@ -51,37 +95,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. API 키 (.env)
-
-프로젝트 루트에 `.env` 파일을 만들고 다음 변수를 설정하세요.
-
-| 변수 | 설명 |
-|------|------|
-| `HF_API_KEY` | Hugging Face API 토큰 (LLM·임베딩 호출용) |
-| `TAVILY_API_KEY` | Tavily 검색 API 키 (관련 문서 없을 때 웹 검색용, 선택) |
-
-예시:
-
-```
-HF_API_KEY=hf_xxxxxxxxxxxx
-TAVILY_API_KEY=tvly-xxxxxxxxxxxx
-```
-
-## 실행 방법
-
-### Streamlit 데모
-
-```bash
-cd LangGraph
-streamlit run stream.py
-```
-
-- 브라우저에서 채팅 UI 접속
-- 사이드바에서 PDF/TXT 업로드, 문서 목록·연결 상태 확인
-
-### FastAPI + React 웹 앱
-
-**백엔드**
+### 2) FastAPI 백엔드 실행
 
 ```bash
 cd LangGraph
@@ -89,7 +103,7 @@ pip install fastapi uvicorn python-multipart
 uvicorn api:app --reload --port 8800
 ```
 
-**프론트엔드**
+### 3) React 프론트 실행
 
 ```bash
 cd LangGraph/frontend
@@ -97,32 +111,47 @@ npm install
 npm run dev
 ```
 
-- 프론트: http://localhost:5173 (Vite 기본)
-- API: http://localhost:8800
+- Frontend: `http://localhost:5173`
+- API: `http://localhost:8800`
 
-### Jupyter 노트북
+### 4) Streamlit 데모 (선택)
 
-`LangGraph/LangGraph.ipynb` 를 열어 셀 단위로 파이프라인 실험 가능.
+```bash
+cd LangGraph
+streamlit run stream.py
+```
 
-## API 엔드포인트 (FastAPI)
+---
 
-| 메서드 | 경로 | 설명 |
-|--------|------|------|
-| POST | `/api/chat` | 메시지 전송 → RAG 답변 (body: `message`, 선택 `thread_id`) |
-| POST | `/api/upload` | PDF/TXT 파일 업로드 → ChromaDB 적재 |
-| GET | `/api/status` | 모델명, HF/Tavily/ChromaDB/파이프라인 연결 상태 |
-| GET | `/api/documents` | ChromaDB 컬렉션 목록 및 문서 수 |
-| POST | `/api/reset` | 새 대화 세션 ID 발급 |
+## 🧩 API 엔드포인트
 
-## 사용 모델
+| Method | Path | 설명 |
+|---|---|---|
+| `POST` | `/api/chat` | 질문 전송 후 답변 반환 (`message`, 선택 `thread_id`) |
+| `POST` | `/api/upload` | PDF/TXT 업로드 및 벡터 DB 적재 |
+| `GET` | `/api/status` | 모델/연결 상태 조회 |
+| `GET` | `/api/documents` | 컬렉션 목록 및 문서 개수 |
+| `POST` | `/api/reset` | 새 세션 ID 발급 |
 
-- **라우팅·판단·요약**: `meta-llama/Llama-3.1-8B-Instruct`
-- **답변 생성(RAG)**: `meta-llama/Meta-Llama-3-8B-Instruct`
+---
+
+## 🤖 현재 모델 설정
+
+- **라우팅/판단/요약**: `Qwen/Qwen2.5-14B-Instruct`
+- **답변 생성(RAG)**: `Qwen/Qwen2.5-14B-Instruct`
 - **임베딩**: `BAAI/bge-m3`
 
-(Hugging Face Inference API 또는 동일 인터페이스 사용)
+---
 
-## 라이선스 및 참고
+## 🧪 LoRA 관련 상태
 
-- `.env` 는 버전 관리에서 제외되어 있습니다 (`.gitignore`).
-- ChromaDB 데이터는 `LangGraph/chroma_db/` 에 로컬로 저장됩니다.
+> ⚠️ **LoRA 파인튜닝 파트는 현재 미구현상태입니다다.**  
+> 데이터셋 구성, 학습 전략, 어댑터 병합 여부는 추후 확정 예정입니다.
+
+---
+
+## 📌 참고 사항
+
+- `.env` 파일은 Git에 포함하지 않습니다.
+- ChromaDB 데이터는 `LangGraph/chroma_db/`에 로컬 저장됩니다.
+- 실험용 파일/노트북은 운영 코드와 분리하여 관리하는 것을 권장합니다.
