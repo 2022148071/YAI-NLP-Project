@@ -1,4 +1,29 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import remarkGfm from "remark-gfm";
+import rehypeKatex from "rehype-katex";
+
+function normalizeMathMarkdown(text) {
+  const src = String(text ?? "");
+
+  // 표준 LaTeX 블록 구분자: \[ ... \] -> $$ ... $$
+  let out = src.replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_, expr) => {
+    return `\n$$\n${expr.trim()}\n$$\n`;
+  });
+
+  // 비표준 수식 표기: [ ... ] -> $$ ... $$ (링크 [text](url) 는 제외)
+  out = out.replace(/\[\s*([^\[\]\n]+?)\s*\](?!\()/g, (full, expr) => {
+    const candidate = expr.trim();
+    const looksLikeMath =
+      /\\[a-zA-Z]+/.test(candidate) || /[=^_]/.test(candidate);
+    if (!looksLikeMath) return full;
+    const cleaned = candidate.replace(/\s*,\s*/g, " ");
+    return `\n$$\n${cleaned}\n$$\n`;
+  });
+
+  return out;
+}
 
 /**
  * ChatArea – 채팅 메시지 + 입력 바 + 파일 업로드
@@ -63,6 +88,11 @@ export default function ChatArea({ messages, loading, onSend, onUpload }) {
     if (e.target.files.length) handleFiles(e.target.files);
   };
 
+  const isStreamingAssistant =
+    messages.length > 0 &&
+    messages[messages.length - 1].role === "assistant" &&
+    messages[messages.length - 1].streaming;
+
   return (
     <main className="chat-area">
       {/* ── 메시지 영역 ── */}
@@ -81,13 +111,23 @@ export default function ChatArea({ messages, loading, onSend, onUpload }) {
               <div className={`avatar ${m.role}`}>
                 {m.role === "user" ? "👤" : "🤖"}
               </div>
-              <div className={`bubble ${m.role}`}>{m.content}</div>
+              <div className={`bubble ${m.role}`}>
+                <div className="markdown-body">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                  >
+                    {normalizeMathMarkdown(m.content)}
+                  </ReactMarkdown>
+                </div>
+                {m.streaming ? "▌" : ""}
+              </div>
             </div>
           ))
         )}
 
         {/* 로딩 애니메이션 */}
-        {loading && (
+        {loading && !isStreamingAssistant && (
           <div className="message-row assistant">
             <div className="avatar assistant">🤖</div>
             <div className="bubble assistant">

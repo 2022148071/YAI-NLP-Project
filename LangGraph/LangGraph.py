@@ -83,7 +83,7 @@ COLLECTION_CHAT_SUMMARY = "chat_history_summarized"  # 대화 요약 저장
 # CHAIN_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # 답변 생성용 (rag.base)
 
 ROUTER_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 라우팅·판단·요약용
-CHAIN_MODEL = "gemini-3-flash-preview"  # 답변 생성용 (rag.base)
+CHAIN_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 답변 생성용 (rag.base)
 EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델
 
 MAX_CHARS_PER_DOC = 1500  # 웹 검색 결과 요약 임계치 (≈1000 토큰)
@@ -182,8 +182,6 @@ def _init_rag_chain(
     """ChromaDB 기반 RAG 체인 (retriever + chain) 초기화"""
     global _retriever, _chain, _answer_model_used
     _log("🚀 ChromaDB 기반 RAG 체인 생성 시작...")
-    _answer_model_used = _answer_model_name()
-    _log(f"🤖 답변 체인 모델 : {_answer_model_used}")
     rag = ChromaRetrievalChain(
         persist_directory=persist_directory,
         collection_name=collection_name,
@@ -306,18 +304,6 @@ def _conversation_only(messages) -> list:
         if role in {"user", "assistant", "human", "ai"}:
             conv.append((role, content))
     return conv
-
-
-def _answer_model_name() -> str:
-    """
-    llm_answer에서 실제로 사용될 답변 모델명을 반환.
-    rag.base.RetrievalChain.create_model() 선택 로직과 동일.
-    """
-    provider = os.environ.get("LLM_PROVIDER", "huggingface").lower()
-    if provider in {"gemini", "genie"}:
-        return os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-    return "Qwen/Qwen2.5-14B-Instruct"
-
 
 def _summarize_if_long(content: str, max_chars: int = MAX_CHARS_PER_DOC) -> str:
     """텍스트가 max_chars 를 초과하면 _chat_hf 로 요약"""
@@ -492,7 +478,6 @@ def llm_answer(state: GraphState) -> GraphState:
     question = state["question"]
     context = state.get("context", "")
     chat_history = state.get("messages", [])
-    _log(f"🤖 llm_answer 모델: {_answer_model_name()}")
 
     try:
         response = _chain.invoke(
@@ -843,15 +828,6 @@ def query(question: str, thread_id: str | None = None) -> Dict[str, Any]:
 def get_app():
     """컴파일된 LangGraph 앱 인스턴스 반환"""
     return _app
-
-
-def get_answer_model_name() -> str:
-    """
-    답변 체인에 실제 사용 중인 모델명 반환.
-    초기화 전이면 현재 환경변수 기준 예상 모델명을 반환.
-    """
-    return _answer_model_used or _answer_model_name()
-
 
 def is_initialized() -> bool:
     """파이프라인 초기화 완료 여부"""
