@@ -124,6 +124,7 @@ class GraphState(TypedDict):
     answer: Annotated[str, "LLM 이 생성한 최종 답변"]
     messages: Annotated[list, add_messages]  # 대화 이력 (누적)
     relevance: Annotated[str, "검색 문서 관련성 yes/no"]
+    policy: Annotated[str, "학생에 대한 답안 방향성"]
 
 
 # ============================================================
@@ -480,13 +481,15 @@ def llm_answer(state: GraphState) -> GraphState:
     question = state["question"]
     context = state.get("context", "")
     chat_history = state.get("messages", [])
-
+    #policy를 어디서 가져올 진 아직 미정
+    policy = state.get("policy", "")
     try:
         response = _chain.invoke(
             {
                 "question": question,
                 "context": context,
                 "chat_history": chat_history,
+                "policy": policy,
             }
         )
     except Exception as e:
@@ -583,12 +586,13 @@ def web_search(state: GraphState) -> GraphState:
 def save_memory(state: GraphState) -> GraphState:
     """
     [save_memory 노드]
-    누적 대화가 충분할 때 오래된 5 턴(10 messages)을
-    raw / summary 컬렉션에 각각 저장.
+    10턴마다 실행되어:
+      1) 오래된 대화를 raw 컬렉션에 저장
+      2) 최근 대화를 분석하여 다음 10턴간의 답변 방향성(policy)을 생성
     """
     messages = state.get("messages", [])
     conv = _conversation_only(messages)
-    MIN_MSGS = 10  # 5 턴 = 10 메시지
+    MIN_MSGS = 20  # 10 턴 = 20 메시지
 
     if len(conv) < MIN_MSGS:
         _log(f"ℹ️ save_memory 건너뜀: 대화 {len(conv)}개 (< {MIN_MSGS})")
@@ -599,48 +603,22 @@ def save_memory(state: GraphState) -> GraphState:
     if not raw_text:
         return {}
 
-    # ── 요약 생성 ──
-    summary_prompt = f"""다음은 사용자-어시스턴트 대화의 오래된 5 턴입니다.
-핵심 사실(개인정보/선호/약속/중요 맥락)만 한국어로 4~6 문장 내로 요약하세요.
-질문에 답하지 말고, 메모리 저장용 요약만 출력하세요.
-
-[Conversation]
-{raw_text}""".strip()
-
-    try:
-        resp = _chat_hf.invoke(summary_prompt)
-        summary_text = (
-            resp.content if hasattr(resp, "content") else str(resp)
-        ).strip()
-    except Exception as e:
-        _log(f"⚠️ 요약 생성 실패: {e}")
-        summary_text = raw_text[:1200]
-
     ts = datetime.now(timezone.utc).isoformat()
     mem_id = uuid.uuid4().hex
 
+    # ── raw 대화 저장 ──
     raw_doc = Document(
         page_content=raw_text,
         metadata={
             "source": "chat_history_raw",
             "memory_id": mem_id,
             "saved_at": ts,
-            "turn_count": 5,
-            "message_count": MIN_MSGS,
-        },
-    )
-    summary_doc = Document(
-        page_content=summary_text,
-        metadata={
-            "source": "chat_history_summarized",
-            "memory_id": mem_id,
-            "saved_at": ts,
-            "turn_count": 5,
+            "turn_count": 10,
             "message_count": MIN_MSGS,
         },
     )
 
-    def _bg_save_memory():
+    def _bg_save_raw():
         try:
             _raw_ingest_docs(
                 documents=[raw_doc],
@@ -649,19 +627,46 @@ def save_memory(state: GraphState) -> GraphState:
                 chunk_size=1200,
                 chunk_overlap=120,
             )
-            _raw_ingest_docs(
-                documents=[summary_doc],
-                persist_directory=PERSIST_DIR,
-                collection_name=COLLECTION_CHAT_SUMMARY,
-                chunk_size=400,
-                chunk_overlap=40,
-            )
-            _log("✅ save_memory 완료 (raw + summary 저장) (bg)")
+            _log("✅ save_memory raw 저장 완료 (bg)")
         except Exception as e:
-            _log(f"⚠️ save_memory 저장 실패 (bg): {e}")
+            _log(f"⚠️ save_memory raw 저장 실패 (bg): {e}")
 
-    _bg_executor.submit(_bg_save_memory)
-    return {}
+    _bg_executor.submit(_bg_save_raw)
+
+    # ── policy 생성 (최근 대화 기반) ──
+    recent = conv[-20:]  # 최근 10턴
+    conv_text = "\n".join(f"{r}: {c}" for r, c in recent).strip()
+
+    policy_prompt = f"""당신은 학습 튜터의 교육 전략 분석가입니다.
+아래 학생과 튜터의 최근 대화 내용을 분석하여, 앞으로 10턴 동안 튜터가 취해야 할 답변 방향성(policy)을 결정하세요.
+
+[최근 대화 내용]
+{conv_text}
+
+아래 보기 중에서 학생에게 가장 적합한 방향성을 1~2개 선택하고, 해당 형식 그대로 출력하세요.
+여러 개 선택 시 줄바꿈으로 구분합니다.
+
+- 개념 이해 부족 -> 예시를 통한 개념 설명
+- 응용능력 부족 -> 유사 문제 추천
+- 암기 능력 강화 -> 앞글자를 따 암기방식 추천
+- 개념 간 연결 부족 -> 연관 개념 및 비교 설명
+- 자주 틀리는 유형 -> 오답 분석 및 반복 학습 유도
+- 심화 학습 필요 -> 난이도 높은 질문 유도
+- 기초 부족 -> 선수 개념부터 단계적 설명
+
+방향성만 출력하세요. 다른 설명은 불필요합니다.""".strip()
+
+    try:
+        resp = _chat_hf.invoke(policy_prompt)
+        policy_text = (
+            resp.content if hasattr(resp, "content") else str(resp)
+        ).strip()
+    except Exception as e:
+        _log(f"⚠️ policy 생성 실패: {e}")
+        policy_text = state.get("policy", "")
+
+    _log(f"📋 policy 갱신: {policy_text}")
+    return {"policy": policy_text}
 
 
 # ============================================================
@@ -713,8 +718,12 @@ def is_relevant(state: GraphState) -> str:
 
 
 def save_or_not(state: GraphState) -> str:
-    """메시지 수 > 20 이면 save_memory 로 분기"""
-    return "save_chat" if len(state.get("messages", [])) > 20 else "too short"
+    """대화가 10턴 단위(20 메시지)일 때 save_memory 로 분기하여 policy 갱신"""
+    conv = _conversation_only(state.get("messages", []))
+    turn_count = len(conv) // 2
+    if turn_count > 0 and turn_count % 10 == 0:
+        return "save_chat"
+    return "too short"
 
 
 # ============================================================

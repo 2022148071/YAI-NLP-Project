@@ -134,7 +134,9 @@ class RetrievalChain(ABC):
             "You are an assistant for question-answering tasks. "
             "Use the following pieces of retrieved context to answer "
             "the question. If you don't know the answer, say that you "
-            "don't know. Be kind and friendly when user says life question."
+            "don't know. Be kind and friendly when user says life question. "
+            "And answer the question based on the policy.\n\n"
+            "Policy: {policy}\n\n"
             "keep answer concise. And answer in Korean if user asks in Korean.\n\n"
             "{context}"
         )
@@ -172,6 +174,7 @@ class RetrievalChain(ABC):
                 "question": itemgetter("question"),
                 "context": itemgetter("context"),
                 "chat_history": itemgetter("chat_history"),
+                "policy": itemgetter("policy"),
             }
             | prompt
             | model

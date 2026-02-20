@@ -47,5 +47,5 @@ template: |
  {context}
 
  # Your final answer to the user's question:
-input_variables: ["question", "context", "chat_history"]
+input_variables: ["question", "context", "chat_history", "policy"]
 
