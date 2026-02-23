@@ -157,17 +157,54 @@ def _init_hf_login():
         _log("⚠️ HF_API_KEY 가 설정되지 않았습니다")
 
 
-def _init_chat_model():
-    """라우팅 · 판단 · 요약용 LLM 초기화 (Llama-3.1-8B-Instruct)"""
-    global _chat_hf
-    llm = HuggingFaceEndpoint(
-        repo_id=ROUTER_MODEL,
-        task="text-generation",
+def _make_vessel_chat_model():
+    """
+    vessel(로컬 GPU)용 LLM 생성.
+    transformers 파이프라인 → LangChain 호환 래퍼(.invoke() 반환값에 .content 있음).
+    """
+    from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+    from langchain_community.llms import HuggingFacePipeline
+
+    model_kwargs = {"device_map": "auto", "torch_dtype": "auto"}
+    if os.getenv("LLM_8BIT", "").lower() in ("1", "true", "yes"):
+        model_kwargs["load_in_8bit"] = True  # 3090 24GB 등에서 VRAM 절약
+
+    model = AutoModelForCausalLM.from_pretrained(ROUTER_MODEL, **model_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(ROUTER_MODEL)
+
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        max_new_tokens=1024,
         temperature=0.7,
-        max_new_tokens=512,
+        do_sample=True,
     )
-    _chat_hf = ChatHuggingFace(llm=llm)
-    _log(f"✅ 라우팅 LLM 로드 완료: {ROUTER_MODEL}")
+    llm = HuggingFacePipeline(pipeline=pipe)
+
+    # ChatHuggingFace 가 문자열 출력(llm.invoke 결과)을 AIMessage(content=...)로 감싸주므로,
+    # LangGraph 전체에서 기대하는 `.invoke(...).content` 인터페이스와 그대로 호환된다.
+    return ChatHuggingFace(llm=llm)
+
+
+def _init_chat_model():
+    """라우팅·판단·요약용 LLM 초기화. LLM_MODE=vessel 이면 로컬 GPU, 아니면 API."""
+    global _chat_hf
+
+    mode = (os.getenv("LLM_MODE") or "api").strip().lower()
+
+    if mode == "vessel":
+        _chat_hf = _make_vessel_chat_model()
+        _log(f"✅ 라우팅 LLM 로드 완료 (vessel 로컬): {ROUTER_MODEL}")
+    else:
+        llm = HuggingFaceEndpoint(
+            repo_id=ROUTER_MODEL,
+            task="text-generation",
+            temperature=0.7,
+            max_new_tokens=1024,
+        )
+        _chat_hf = ChatHuggingFace(llm=llm)
+        _log(f"✅ 라우팅 LLM 로드 완료 (API): {ROUTER_MODEL}")
 
 
 def _init_embeddings():

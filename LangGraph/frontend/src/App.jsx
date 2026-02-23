@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Sidebar from "./components/Sidebar";
 import ChatArea from "./components/ChatArea";
-import ToastContainer from "./components/Toast";
+// import ToastContainer from "./components/Toast";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -20,7 +20,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [threadId, setThreadId] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [toasts, setToasts] = useState([]);
+  // const [toasts, setToasts] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   // 시스템 상태 (디버깅 패널용)
@@ -59,24 +59,16 @@ export default function App() {
     });
   }, []);
 
-  // ── 토스트 헬퍼 ──
-  const addToast = useCallback((msg) => {
-    const id = Date.now() + Math.random();
-    setToasts((prev) => [...prev, { id, msg }]);
-    // 2.5초 후 자동 제거 (CSS 페이드 1s + 여유)
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 2500);
-  }, []);
-
-  // 서버 로그 배열 → 토스트로 변환
-  const showLogs = useCallback(
-    (logs) => {
-      if (!logs) return;
-      logs.forEach((l) => addToast(l));
-    },
-    [addToast]
-  );
+  // ── 토스트 헬퍼 (토스트 끄기: 아래 주석 해제하고, 맨 아래 ToastContainer·호출부도 주석 해제) ──
+  // const [toasts, setToasts] = useState([]);  ← 상태는 위에서 이미 주석됨
+  // const addToast = useCallback((msg) => {
+  //   const id = Date.now() + Math.random();
+  //   setToasts((prev) => [...prev, { id, msg }]);
+  //   setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 2500);
+  // }, []);
+  // const showLogs = useCallback((logs) => { if (!logs) return; logs.forEach((l) => addToast(l)); }, [addToast]);
+  const addToast = useCallback(() => {}, []);
+  const showLogs = useCallback(() => {}, []);
 
   // ── 시스템 상태 조회 ──
   const fetchStatus = useCallback(async () => {
@@ -122,8 +114,8 @@ export default function App() {
         // 어시스턴트 답변 스트리밍 출력
         await streamAssistantText(data.answer);
 
-        // 서버 로그 토스트
-        showLogs(data.logs);
+        // 서버 로그 토스트 (토스트 끄면 주석)
+        // showLogs(data.logs);
       } catch (err) {
         setMessages((prev) => [
           ...prev,
@@ -133,7 +125,7 @@ export default function App() {
         setLoading(false);
       }
     },
-    [loading, threadId, showLogs, streamAssistantText]
+    [loading, threadId, streamAssistantText]
   );
 
   // ── 파일 업로드 ──
@@ -142,25 +134,24 @@ export default function App() {
       const form = new FormData();
       form.append("file", file);
 
-      addToast(`📤 ${file.name} 업로드 중…`);
+      // addToast(`📤 ${file.name} 업로드 중…`);
 
       try {
         const res = await fetch("/api/upload", { method: "POST", body: form });
         const data = await res.json();
 
         if (data.status === "ok") {
-          addToast(`✅ ${file.name} 적재 완료`);
+          // addToast(`✅ ${file.name} 적재 완료`);
         } else {
-          addToast(`❌ ${file.name} 적재 실패: ${data.error}`);
+          // addToast(`❌ ${file.name} 적재 실패: ${data.error}`);
         }
-        showLogs(data.logs);
-        // 문서 목록 갱신
+        // showLogs(data.logs);
         fetchStatus();
       } catch (err) {
-        addToast(`❌ 업로드 실패: ${err.message}`);
+        // addToast(`❌ 업로드 실패: ${err.message}`);
       }
     },
-    [addToast, showLogs, fetchStatus]
+    [fetchStatus]
   );
 
   // ── 대화 초기화 ──
@@ -173,8 +164,8 @@ export default function App() {
       setThreadId(null);
     }
     setMessages([]);
-    addToast("🗑️ 대화가 초기화되었습니다.");
-  }, [addToast]);
+    // addToast("🗑️ 대화가 초기화되었습니다.");
+  }, []);
 
   // ── 렌더링 ──
   return (
@@ -203,7 +194,8 @@ export default function App() {
         onUpload={uploadFile}
       />
 
-      <ToastContainer toasts={toasts} />
+      {/* 토스트 팝업 끄기: 위에서 toasts/addToast/showLogs 주석 해제하고 아래 주석 해제 */}
+      {/* <ToastContainer toasts={toasts} /> */}
     </div>
   );
 }

@@ -6,7 +6,7 @@ PDF/TXT 문서를 적재하고, 대화 맥락 + 벡터 검색 + (필요 시) 웹
 
 ---
 
-## 🚀 핵심 기능
+## 🚀 Key Feature
 
 - 📚 **문서 기반 질의응답(RAG)**: ChromaDB + LangChain/LangGraph 기반 검색-생성 파이프라인
 - 🧭 **질문 라우팅**: 질문 특성에 따라 검색 필요 여부를 그래프에서 분기
@@ -17,7 +17,7 @@ PDF/TXT 문서를 적재하고, 대화 맥락 + 벡터 검색 + (필요 시) 웹
 
 ---
 
-## 🗂️ 프로젝트 구조
+## 🗂️ Project Structure
 
 ```text
 YAI-NLP/
@@ -51,7 +51,7 @@ YAI-NLP/
 
 ---
 
-## ⚙️ 기술 스택
+## ⚙️ Technical Stack
 
 - **Backend**: FastAPI, LangGraph, LangChain
 - **Frontend**: React, Vite
@@ -61,15 +61,17 @@ YAI-NLP/
 
 ---
 
-## 🔐 환경 변수 설정
+## 🔐 Environmental Variables
 
 루트의 `.env` 파일에 아래 값을 설정하세요.
 
 | 변수 | 필수 | 설명 |
 |---|---|---|
-| `HF_API_KEY` | ✅ | Hugging Face API 토큰 (LLM/임베딩 호출) |
+| `HF_API_KEY` | ✅ (API 모드 시) | Hugging Face API 토큰 (LLM/임베딩 호출) |
 | `TAVILY_API_KEY` | 선택 | 웹 검색 보강 기능 사용 시 필요 |
 | `EMBEDDING_MODE` | 선택 | `local`(기본) / `api` |
+| `LLM_MODE` | 선택 | `api`(기본) / `vessel`(로컬 GPU, 3090 등) |
+| `LLM_8BIT` | 선택 | vessel 시 `1` 또는 `true` 이면 8bit 양자화 (24GB VRAM 권장) |
 
 예시:
 
@@ -77,11 +79,14 @@ YAI-NLP/
 HF_API_KEY=hf_xxxxxxxxxxxx
 TAVILY_API_KEY=tvly-xxxxxxxxxxxx
 EMBEDDING_MODE=local
+# vessel(로컬 GPU) 사용 시:
+# LLM_MODE=vessel
+# LLM_8BIT=1
 ```
 
 ---
 
-## 🏃 실행 방법
+## 🏃 Run
 
 ### 1) Python 의존성 설치
 
@@ -123,7 +128,7 @@ streamlit run stream.py
 
 ---
 
-## 🧩 API 엔드포인트
+## 🧩 API endpoints
 
 | Method | Path | 설명 |
 |---|---|---|
@@ -135,7 +140,7 @@ streamlit run stream.py
 
 ---
 
-## 🤖 현재 모델 설정
+## 🤖 Current model setting
 
 - **라우팅/판단/요약**: `Qwen/Qwen2.5-14B-Instruct`
 - **답변 생성(RAG)**: `Qwen/Qwen2.5-14B-Instruct`
@@ -143,7 +148,7 @@ streamlit run stream.py
 
 ---
 
-## 🧪 LoRA 관련 상태
+## 🧪 LoRA feature
 
 > ⚠️ **MultiLoRA를 이용한 맞춤형 질의응답 튜터**  
 > 데이터셋 구성, 학습 전략, 어댑터 병합 여부는 추후 확정 예정입니다.

@@ -10,14 +10,16 @@ from langchain_classic import hub
 # Hugging Face 관련 라이브러리 (OpenAI 대체)
 from langchain_huggingface import HuggingFaceEmbeddings, ChatHuggingFace, HuggingFaceEndpoint
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # ─── 임베딩 설정 (ingest.py, chroma.py 등에서도 이 설정을 공유) ────────
 # ⚠️ 적재(ingest)와 검색(retrieve) 시 반드시 동일한 모델을 사용해야 합니다!
 EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델명
 EMBEDDING_DEVICE = "auto"                         # "cpu" / "cuda" / "auto"
+ANSWER_MODEL = "Qwen/Qwen2.5-14B-Instruct"
 
 
-def create_embedding_local():
+def create_embedding_vessel():
     """
     [로컬 방식] 모델을 다운로드하여 로컬에서 실행
     - 최초 실행 시 ~/.cache/huggingface/hub/ 에 모델 다운로드
@@ -60,7 +62,7 @@ def create_embedding_auto():
         return create_embedding_api()
     else:
         print(f"💻 임베딩: 로컬 방식 ({EMBEDDING_MODEL}, device={EMBEDDING_DEVICE})")
-        return create_embedding_local()
+        return create_embedding_vessel()
 
 
 class RetrievalChain(ABC):
@@ -108,17 +110,40 @@ class RetrievalChain(ABC):
         LLM 모델 생성
         - HuggingFaceEndpoint 기반 Qwen/Qwen2.5-14B-Instruct 사용
         """
-        # 환경 변수에서 토큰 확인
+
+        mode = os.getenv("LLM_MODE", "").lower()
+        if mode == "vessel":
+
+            from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+            from langchain_community.llms import HuggingFacePipeline
+
+            model_kwargs = {"device_map": "auto", "torch_dtype": "auto"}
+            if os.getenv("LLM_8BIT", "").lower() in ("1", "true", "yes"):
+                model_kwargs["load_in_8bit"] = True  # 3090 24GB 등에서 VRAM 절약
+            model = AutoModelForCausalLM.from_pretrained(ANSWER_MODEL, **model_kwargs)
+            tokenizer = AutoTokenizer.from_pretrained(ANSWER_MODEL)
+
+            pipe = pipeline(
+                    model=model,
+                    tokenizer=tokenizer,
+                    task="text-generation",
+                    max_new_tokens=1024,
+                    temperature=0.7,
+                    do_sample=True,
+                    )
+            llm = HuggingFacePipeline(pipeline=pipe)
+
+            return ChatHuggingFace(llm=llm)
+
         api_token = os.environ.get("HF_API_KEY")
         if not api_token:
             raise ValueError("HF_API_KEY 환경 변수가 설정되지 않았습니다.")
 
         llm = HuggingFaceEndpoint(
-            repo_id="Qwen/Qwen2.5-14B-Instruct",
-            #repo_id="HuggingFaceH4/zephyr-7b-beta",
-            task="conversational",
-            max_new_tokens=512,
-            temperature=0.3,
+            repo_id=ANSWER_MODEL,
+            task="text-generation",
+            max_new_tokens=1024,
+            temperature=0.7,
             huggingfacehub_api_token=api_token
         )
         return ChatHuggingFace(llm=llm)
