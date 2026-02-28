@@ -5,6 +5,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    watch: {
+      usePolling: true,
+    },
     // FastAPI 백엔드로 프록시
     proxy: {
       "/api": {

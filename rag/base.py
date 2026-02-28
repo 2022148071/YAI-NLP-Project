@@ -18,12 +18,17 @@ EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델명
 EMBEDDING_DEVICE = "auto"                         # "cpu" / "cuda" / "auto"
 ANSWER_MODEL = "Qwen/Qwen2.5-14B-Instruct"
 
-STYLE_MODELS = {
-    "direct": "RiverWon/NeuLoRA-direct",
-    "socratic": "RiverWon/NeuLoRA-socratic",
-    "scaffolding": "RiverWon/NeuLoRA-scaffolding",
-    "feedback": "RiverWon/NeuLoRA-feedback",
-}
+
+def _resolve_embedding_device():
+    """PyTorch/SentenceTransformer는 'auto'를 받지 않으므로, 'auto'일 때 cuda/cpu로 변환."""
+    dev = EMBEDDING_DEVICE.strip().lower()
+    if dev == "auto":
+        try:
+            import torch
+            return "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            return "cpu"
+    return dev if dev in ("cpu", "cuda") else "cpu"
 
 
 def create_embedding_vessel():
@@ -33,9 +38,10 @@ def create_embedding_vessel():
     - 이후 캐시에서 로드 (오프라인 가능)
     - GPU 활용 가능 → 빠른 임베딩
     """
+    device = _resolve_embedding_device()
     return HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
-        model_kwargs={"device": EMBEDDING_DEVICE},
+        model_kwargs={"device": device},
         encode_kwargs={"normalize_embeddings": True},
     )
 
@@ -112,31 +118,52 @@ class RetrievalChain(ABC):
         )
         return dense_retriever
 
-    def create_model(self, model_name: str | None = None, external_model=None):
+    def create_model(self):
         """
         LLM 모델 생성
-        - external_model 이 주어지면 그대로 반환 (vessel 공유 모델용)
-        - vessel 모드: 외부에서 PEFT 모델을 주입받아 사용
-        - api 모드: HuggingFaceEndpoint 기반
+        - HuggingFaceEndpoint 기반 Qwen/Qwen2.5-14B-Instruct 사용
         """
-        if external_model is not None:
-            return external_model
 
         mode = os.getenv("LLM_MODE", "").lower()
         if mode == "vessel":
-            raise RuntimeError(
-                "vessel 모드에서는 external_model 을 전달해야 합니다. "
-                "LangGraph.py 의 _init_vessel_lora() 를 먼저 호출하세요."
-            )
+
+            from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
+            from langchain_huggingface import HuggingFacePipeline
+
+            model_kwargs = {"device_map": "auto", "dtype": "auto"}
+            q4 = os.getenv("LLM_4BIT", "").lower() in ("1", "true", "yes")
+            q8 = os.getenv("LLM_8BIT", "").lower() in ("1", "true", "yes")
+            if q4:
+                print("⚖️  4bit 양자화 사용")
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype="float16",
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
+            elif q8:
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_8bit=True) # 3090 24GB 등에서 VRAM 절약
+            model = AutoModelForCausalLM.from_pretrained(ANSWER_MODEL, **model_kwargs)
+            tokenizer = AutoTokenizer.from_pretrained(ANSWER_MODEL)
+
+            pipe = pipeline(
+                    model=model,
+                    tokenizer=tokenizer,
+                    task="text-generation",
+                    max_new_tokens=1024,
+                    temperature=0.7,
+                    do_sample=True,
+                    )
+            llm = HuggingFacePipeline(pipeline=pipe)
+
+            return ChatHuggingFace(llm=llm)
 
         api_token = os.environ.get("HF_API_KEY")
         if not api_token:
             raise ValueError("HF_API_KEY 환경 변수가 설정되지 않았습니다.")
 
-        repo_id = model_name or ANSWER_MODEL
-
         llm = HuggingFaceEndpoint(
-            repo_id=repo_id,
+            repo_id=ANSWER_MODEL,
             task="text-generation",
             max_new_tokens=1024,
             temperature=0.7,
@@ -158,7 +185,6 @@ class RetrievalChain(ABC):
             "don't know. Be kind and friendly when user says life question. "
             "And answer the question based on the policy.\n\n"
             "Policy: {policy}\n\n"
-            "Teaching Style: {style_instruction}\n\n"
             "keep answer concise. And answer in Korean if user asks in Korean.\n\n"
             "{context}"
         )
@@ -197,7 +223,6 @@ class RetrievalChain(ABC):
                 "context": itemgetter("context"),
                 "chat_history": itemgetter("chat_history"),
                 "policy": itemgetter("policy"),
-                "style_instruction": itemgetter("style_instruction"),
             }
             | prompt
             | model

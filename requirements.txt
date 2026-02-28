@@ -1,3 +1,9 @@
+# API 서버 (setup/원격 재연결 시 누락 방지)
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+
+# LangChain / RAG
 langchain-chroma
 langchain-core
 langchain-community
@@ -5,19 +11,28 @@ langchain-text-splitters
 langchain
 langchain-classic
 langchain-huggingface
-faiss-cpu
-chromadb
-pdfplumber
-python-dotenv
-pypdf
-sentence_transformers
+langchain-tavily
 langgraph
+
+# Vector DB & 문서
+chromadb
+faiss-cpu
+pdfplumber
+pypdf
+
+# 유틸
+python-dotenv
 ipywidgets
 tavily-python
 streamlit
+
+# LLM / 임베딩 / PEFT
 transformers
-torch
-numpy
-peft
-bitsandbytes
+sentence_transformers
 accelerate
+bitsandbytes
+peft
+torch
+
+# flash-attn: PyTorch/CUDA 버전 맞춘 뒤 필요 시 별도 설치
+# pip install --no-build-isolation flash-attn
