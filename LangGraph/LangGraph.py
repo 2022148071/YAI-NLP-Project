@@ -32,6 +32,8 @@ import time
 import json
 import re
 import uuid
+import numpy as np
+import requests
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import TypedDict, Annotated, List, Dict, Any
@@ -83,12 +85,31 @@ COLLECTION_CHAT_SUMMARY = "chat_history_summarized"  # 대화 요약 저장
 # ROUTER_MODEL = "meta-llama/Llama-3.1-8B-Instruct"  # 라우팅·판단·요약용
 # CHAIN_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"  # 답변 생성용 (rag.base)
 
-ROUTER_MODEL = "Qwen/Qwen2.5-7B-Instruct"  # 라우팅·판단·요약용
-CHAIN_MODEL = "Qwen/Qwen2.5-7B-Instruct"  # 답변 생성용 (rag.base)
+ROUTER_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 라우팅·판단·요약용
+CHAIN_MODEL = "Qwen/Qwen2.5-14B-Instruct"  # 답변 생성용 (rag.base)
 EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델
+
+STYLE_MODELS = {
+    "direct": "RiverWon/NeuLoRA-direct",
+    "socratic": "RiverWon/NeuLoRA-socratic",
+    "scaffolding": "RiverWon/NeuLoRA-scaffolding",
+    "feedback": "RiverWon/NeuLoRA-feedback",
+}
 
 MAX_CHARS_PER_DOC = 1500  # 웹 검색 결과 요약 임계치 (≈1000 토큰)
 
+# llm_answer 프롬프트 내 chat_history 길이 제한
+MAX_HISTORY_TURNS = 6  # 최근 N턴(2N개 메시지)까지 포함
+MAX_HISTORY_CHARS = 2000  # 히스토리 블록 최대 문자 수, 초과 시 앞(오래된 턴)부터 생략
+
+LORA_ROUTER_PATH = Path(__file__).parent / "router_model.json"
+
+# PEFT 어댑터가 서브폴더에 있는 리포 (adapter_config.json 있음)
+# direct:   https://huggingface.co/marimmo/multi-lora/tree/main/direct
+# feedback: https://huggingface.co/marimmo/multi-lora/tree/main/feedback
+# scaffolding: https://huggingface.co/marimmo/multi-lora/tree/main/scaffolding
+# socratic: https://huggingface.co/marimmo/multi-lora/tree/main/socratic
+PEFT_REPO = "marimmo/multi-lora" 
 # ============================================================
 # 4. 외부 패키지 import
 # ============================================================
@@ -98,11 +119,13 @@ from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
 from langchain_chroma import Chroma
 from langchain_tavily import TavilySearch
 from langgraph.graph import END, StateGraph
-from langgraph.graph.message import add_messages
+from langgraph.graph.message import add_messages, REMOVE_ALL_MESSAGES
 from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.messages import RemoveMessage
 
 # ============================================================
 # 5. 로컬 모듈 import (rag 패키지)
+
 # ============================================================
 from rag.base import create_embedding_auto
 from rag.chroma import ChromaRetrievalChain
@@ -130,6 +153,10 @@ class GraphState(TypedDict):
 # ============================================================
 # 7. 모듈 레벨 변수 — initialize() 에서 설정됨
 # ============================================================
+_peft_model = None   # PEFT 어댑터 사용 시에만 설정; 전체 모델 로드 시 None
+_rag_llm = None
+_tokenizer = None
+_use_peft_adapters = False  # True: set_adapter() 사용 / False: 단일 전체 모델
 _retriever = None  # ChromaDB 기반 retriever
 _chain = None  # RAG 답변 체인
 _chat_hf = None  # 라우팅·판단·요약용 LLM
@@ -242,6 +269,177 @@ def _init_rag_chain(
     _chain = rag.chain
     _log("✅ RAG 체인 생성 완료")
 
+def _init_peft_model():
+    """8bit/4bit Multi-LoRA 또는 RiverWon/NeuLoRA-direct 같은 전체 모델 로드"""
+    global _peft_model, _rag_llm, _tokenizer, _use_peft_adapters
+    from transformers import (
+        AutoModelForCausalLM, AutoTokenizer, pipeline, BitsAndBytesConfig
+    )
+    from langchain_community.llms import HuggingFacePipeline
+    from peft import PeftModel, TaskType
+    import torch
+    import requests  # marimmo router 다운로드
+    
+    quant = os.getenv("LLM_QUANT", "8bit").lower()
+    # GPU 메모리 부족 시 CPU 오프로드 허용 (VRAM 작을 때)
+    enable_cpu_offload = os.getenv("LLM_CPU_OFFLOAD", "").lower() in ("1", "true", "yes")
+
+    # 양자화 config
+    if quant == "4bit":
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        _log("🔧 4bit 양자화 활성 (OOM 대비)")
+    else:  # 8bit 우선
+        bnb_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_threshold=6.0,
+            llm_int8_has_fp16_weights=False,
+            bnb_8bit_compute_dtype=torch.bfloat16,
+            bnb_8bit_use_double_quant=True,
+            llm_int8_enable_fp32_cpu_offload=enable_cpu_offload,
+        )
+        if enable_cpu_offload:
+            _log("🔧 8bit + CPU 오프로드 활성 (VRAM 부족 시 일부 레이어 CPU)")
+    
+    # 베이스 14B 로드 (flash_attn 미사용 시 sdpa/eager 사용 — PyTorch·flash_attn ABI 불일치 회피)
+    attn_impl = (os.getenv("ATTN_IMPLEMENTATION") or "sdpa").strip().lower()
+    if attn_impl == "flash_attention_2":
+        try:
+            import flash_attn  # noqa: F401
+        except (ImportError, OSError) as e:
+            _log(f"⚠️ flash_attention_2 로드 실패 ({e}) → sdpa 사용")
+            attn_impl = "sdpa"
+    if attn_impl not in ("flash_attention_2", "sdpa", "eager"):
+        attn_impl = "sdpa"
+    _log(f"🔧 attention 구현: {attn_impl}")
+
+    # CPU 오프로드 시 device_map + max_memory로 GPU 한도 지정 후 나머지는 CPU
+    if enable_cpu_offload and quant != "4bit":
+        max_memory = {0: os.getenv("LLM_GPU_MAX_MEMORY", "20GiB"), "cpu": "30GiB"}
+        device_map = "auto"
+        _log(f"🔧 device_map=auto, max_memory={max_memory}")
+    else:
+        max_memory = None
+        device_map = "auto"
+
+    model = AutoModelForCausalLM.from_pretrained(
+        CHAIN_MODEL,
+        quantization_config=bnb_config,
+        device_map=device_map,
+        max_memory=max_memory,
+        torch_dtype=torch.bfloat16,
+        attn_implementation=attn_impl,
+        low_cpu_mem_usage=True,
+    )
+    _tokenizer = AutoTokenizer.from_pretrained(CHAIN_MODEL)
+    _tokenizer.pad_token = _tokenizer.eos_token
+
+    # 1) marimmo/multi-lora 서브폴더(direct, socratic 등)에서 PEFT 어댑터 로드 시도 (adapter_config.json 있음)
+    # 2) 실패 시 RiverWon/NeuLoRA-* 개별 리포를 PEFT로 시도
+    # 3) 그도 실패 시 RiverWon/NeuLoRA-direct 를 전체 모델로 로드
+    run_model = None
+    try:
+        _peft_model = PeftModel.from_pretrained(
+            model,
+            PEFT_REPO,
+            subfolder="direct",
+            task_type=TaskType.CAUSAL_LM,
+            adapter_name="direct",
+        )
+        for style in ["socratic", "scaffolding", "feedback"]:
+            _peft_model.load_adapter(PEFT_REPO, adapter_name=style, subfolder=style)
+        _use_peft_adapters = True
+        run_model = _peft_model
+        _log(f"✅ 14B {quant} Multi-LoRA 로드 (어댑터: marimmo/multi-lora direct/socratic/scaffolding/feedback)")
+    except Exception as e1:
+        _log(f"ℹ️ marimmo/multi-lora 서브폴더 로드 실패: {e1}")
+        try:
+            _peft_model = PeftModel.from_pretrained(
+                model,
+                STYLE_MODELS["direct"],
+                task_type=TaskType.CAUSAL_LM,
+                adapter_name="direct",
+            )
+            for style, path in list(STYLE_MODELS.items())[1:]:
+                _peft_model.add_adapter(path, adapter_name=style)
+            _use_peft_adapters = True
+            run_model = _peft_model
+            _log(f"✅ 14B {quant} Multi-LoRA 로드 (어댑터: {list(STYLE_MODELS)})")
+        except Exception as e2:
+            err_msg = str(e2)
+            if "adapter_config" not in err_msg and "Entry Not Found" not in err_msg and "EntryNotFoundError" not in type(e2).__name__:
+                raise
+            _log(f"⚠️ PEFT 어댑터 없음 → {STYLE_MODELS['direct']} 전체 모델로 로드")
+            del model
+            torch.cuda.empty_cache()
+            model = AutoModelForCausalLM.from_pretrained(
+                STYLE_MODELS["direct"],
+                quantization_config=bnb_config,
+                device_map=device_map,
+                max_memory=max_memory,
+                torch_dtype=torch.bfloat16,
+                attn_implementation=attn_impl,
+                low_cpu_mem_usage=True,
+            )
+            _tokenizer = AutoTokenizer.from_pretrained(STYLE_MODELS["direct"])
+            _tokenizer.pad_token = _tokenizer.eos_token
+            _peft_model = None
+            _use_peft_adapters = False
+            run_model = model
+            _log(f"✅ 14B {quant} 전체 모델 로드: {STYLE_MODELS['direct']}")
+
+    if run_model is None:
+        raise RuntimeError("PEFT/전체 모델 로드 실패")
+
+    pipe = pipeline(
+        "text-generation",
+        model=run_model,
+        tokenizer=_tokenizer,
+        max_new_tokens=384,
+        temperature=0.7,
+        do_sample=True,
+        pad_token_id=_tokenizer.eos_token_id,
+    )
+    _rag_llm = HuggingFacePipeline(pipeline=pipe)
+    torch.cuda.empty_cache()
+
+def route_style(question: str) -> str:
+    """쿼리를 임베딩하고 가장 가까운 스타일 centroid 선택"""
+    if not LORA_ROUTER_PATH.exists():
+        _log("⚠️ router_model.json 없음 → direct 기본")
+        return "direct"
+    
+    try:
+        with open(LORA_ROUTER_PATH, "r") as f:
+            data = json.load(f)
+        centroids = {
+            style: np.array(vec, dtype=np.float32)
+            for style, vec in data.get("centroids", {}).items()
+        }
+    except Exception as e:
+        _log(f"⚠️ centroids 로드 실패: {e}")
+        return "direct"
+    
+    if not centroids or _embeddings is None:
+        return "direct"
+    
+    query_emb = np.array(_embeddings.embed_query(question), dtype=np.float32)
+    
+    best_style, best_sim = "direct", -1.0
+    for style, centroid in centroids.items():
+        sim = np.dot(query_emb, centroid) / (
+            np.linalg.norm(query_emb) * np.linalg.norm(centroid) + 1e-9
+        )
+        if sim > best_sim:
+            best_sim = sim
+            best_style = style
+    
+    _log(f"📊 centroids 유사도: {best_style}={best_sim:.3f}")
+    return best_style
 
 def initialize(
     persist_directory: str = PERSIST_DIR,
@@ -251,14 +449,23 @@ def initialize(
     """
     전체 파이프라인 초기화 — 최초 1 회만 실행.
 
-    순서: HF 로그인 → 라우팅 LLM → 임베딩 → RAG 체인
+    순서: HF 로그인 → 임베딩 → 라우팅 LLM → PEFT(RAG 답변) LLM → RAG 체인.
+
+    OOM 참고: LLM_MODE=vessel 이면 라우팅용 ROUTER_MODEL(14B)과 답변용 CHAIN_MODEL(14B)을
+    둘 다 GPU에 올리므로 24GB 한 장으로는 부족할 수 있음. 단일 GPU 시 라우팅만 API로 두고
+    LLM_MODE=api 권장 (답변용 PEFT 14B만 로컬).
     """
     global _initialized
     if _initialized:
         return
+
     _init_hf_login()
-    _init_chat_model()
     _init_embeddings()
+    # 라우팅/판단/요약용: vessel이면 동일 GPU에 14B 추가 로드 → 단일 24GB에서 PEFT 14B와 함께 OOM 가능
+    if (os.getenv("LLM_MODE") or "").strip().lower() == "vessel":
+        _log("ℹ️ LLM_MODE=vessel: 라우팅용 14B도 GPU 로드. 단일 24GB GPU면 OOM 시 LLM_MODE=api 로 라우팅만 API 사용 권장.")
+    _init_chat_model()
+    _init_peft_model()
     _init_rag_chain(persist_directory, collection_name, k)
     _initialized = True
     _log("✅ 파이프라인 초기화 완료")
@@ -364,6 +571,54 @@ def _strip_chat_tokens(text: str) -> str:
     text = text.replace("<|im_end|>", "").replace("<|im_start|>", "")
     text = text.replace("<|endoftext|>", "")
     return text.strip()
+
+
+def _clean_answer_for_display(raw: str) -> str:
+    """
+    llm_answer 최종 답변에서 사용자에게 보여주면 안 되는 내용 제거.
+    - 역할 레이블(system, user, assistant, Context:, Policy:, History:)
+    - 웹 검색 출처(출처: http...)
+    - 프롬프트가 그대로 에코된 블록
+    """
+    if not (raw or "").strip():
+        return ""
+    text = _strip_chat_tokens(raw)
+    text = re.sub(r"<\|im_[a-z_]+\|>", "", text).strip()
+    # 출처 URL 제거 (줄 단위 또는 문장 중간)
+    text = re.sub(r"\n\s*출처:\s*https?://[^\n]+", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"^\s*출처:\s*https?://[^\n]+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*출처:\s*https?://\S+", "", text, flags=re.IGNORECASE)
+    # 라인 단위로 역할/메타 라벨 제거 (줄 시작이 system, Context:, Policy:, History:, user, assistant 인 경우)
+    lines = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if not s:
+            lines.append("")
+            continue
+        if re.match(r"^(system|Context:\s*$|Policy:\s*$|History:\s*$)", s, re.IGNORECASE):
+            continue
+        if re.match(r"^(user|assistant)\s*$", s, re.IGNORECASE):
+            continue
+        if s.lower().startswith("context:") and len(s) < 80:
+            continue
+        if s.lower().startswith("policy:") and len(s) < 80:
+            continue
+        if s.lower().startswith("history:") and len(s) < 80:
+            continue
+        if s.lower().startswith("user "):
+            s = s[5:].strip()
+        if s.lower().startswith("assistant "):
+            s = s[9:].strip()
+        lines.append(line)
+    text = "\n".join(lines)
+    # 마지막 'assistant ' 블록만 남기기 (모델이 전체 대화를 에코한 경우)
+    if "\nassistant " in text or "\nuser " in text:
+        parts = re.split(r"\n(?:user|assistant)\s+", text, flags=re.IGNORECASE)
+        if len(parts) > 1:
+            text = parts[-1].strip()
+    # 앞뒤 공백·과도한 줄바꿈 정리
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    return text
 
 
 def _invoke_clean(prompt) -> str:
@@ -535,35 +790,80 @@ def retrieve(state: GraphState) -> GraphState:
     return GraphState(context=format_docs(docs))
 
 
+def _format_chat_history_for_prompt(messages: list, max_turns: int = MAX_HISTORY_TURNS, max_chars: int = MAX_HISTORY_CHARS) -> str:
+    """
+    대화 이력을 프롬프트용 문자열로 변환. 턴 수·문자 수 제한 적용.
+    - max_turns: 최근 N턴(2N개 메시지)만 사용
+    - max_chars: 전체 히스토리 문자열이 이 길이를 넘으면 앞(오래된 턴)부터 생략
+    """
+    conv = _conversation_only(messages)
+    if not conv:
+        return ""
+    # 최근 2*max_turns개 메시지 = max_turns 턴
+    recent = conv[-(2 * max_turns) :] if len(conv) >= 2 * max_turns else conv
+    # user/assistant 쌍으로 포맷 (홀수 개면 마지막 메시지 제외)
+    pair_count = len(recent) // 2
+    if pair_count == 0:
+        return ""
+    lines = []
+    for i in range(pair_count):
+        user_content = (recent[i * 2][1] or "").strip()
+        asst_content = (recent[i * 2 + 1][1] or "").strip()
+        lines.append(f"User: {user_content}\nAssistant: {asst_content}")
+    history_str = "\n\n".join(lines)
+    if len(history_str) <= max_chars:
+        return history_str
+    # 문자 수 초과 시 앞쪽 턴부터 제거 (한 턴 단위로)
+    while len(history_str) > max_chars and len(lines) > 1:
+        lines.pop(0)
+        history_str = "\n\n".join(lines)
+    return history_str
+
+
 def llm_answer(state: GraphState) -> GraphState:
-    """
-    [llm_answer 노드]
-    RAG 체인을 호출하여 최종 답변을 생성.
-    답변과 함께 (user, assistant) 메시지 쌍을 messages 에 추가.
-    """
     question = state["question"]
     context = state.get("context", "")
     chat_history = state.get("messages", [])
-    #policy를 어디서 가져올 진 아직 미정
     policy = state.get("policy", "")
+
+    style = route_style(question)  # centroids → direct/socratic/scaffolding/feedback
+    _log(f"🎯 LoRA 라우팅: {style}")
+    # PEFT 멀티 어댑터일 때만 쿼리별 어댑터 스위칭 (전체 모델 단일 로드 시 무시)
+    if _peft_model is not None:
+        try:
+            _peft_model.set_adapter(style)
+        except (ValueError, KeyError) as e:
+            _log(f"⚠️ 어댑터 '{style}' 적용 실패 ({e}) → direct 사용")
+            style = "direct"
+            _peft_model.set_adapter(style)
+
+    history_str = _format_chat_history_for_prompt(chat_history)
+    if history_str:
+        history_block = f"History:\n{history_str}\n\n"
+    else:
+        history_block = ""
+
+    prompt = f"""<|im_start|>system
+You are a helpful tutor. Use the context below only to inform your answer. Do not repeat or output the words "system", "Context:", "Policy:", "History:", "user", "assistant" or any URLs. Reply only with the assistant's answer in natural language.
+{history_block}Context: {context}
+Policy: {policy}
+<|im_end|>
+<|im_start|>user
+{question}<|im_end|>
+<|im_start|>assistant
+"""
     try:
-        response = _chain.invoke(
-            {
-                "question": question,
-                "context": context,
-                "chat_history": chat_history,
-                "policy": policy,
-            }
-        )
+        response = _rag_llm.invoke(prompt).strip()
+        response = _clean_answer_for_display(response)
     except Exception as e:
-        _log(f"❌ LLM 답변 생성 실패: {type(e).__name__}: {e}")
-        raise
-    response = _strip_chat_tokens(response)
+        _log(f"❌ 생성 실패: {e}")
+        response = "생성 중 오류 발생."
 
     return GraphState(
         answer=response,
         messages=[("user", question), ("assistant", response)],
     )
+
 
 
 def relevance_check(state: GraphState) -> GraphState:
@@ -665,8 +965,9 @@ def save_memory(state: GraphState) -> GraphState:
     """
     [save_memory 노드]
     10턴마다 실행되어:
-      1) 오래된 대화를 raw 컬렉션에 저장
+      1) 오래된 대화 10턴(20개 메시지)을 raw 컬렉션에 저장
       2) 최근 대화를 분석하여 다음 10턴간의 답변 방향성(policy)을 생성
+      3) 저장한 10턴은 state.messages에서 제거하여 이후 context/prompt에 포함되지 않도록 함
     """
     messages = state.get("messages", [])
     conv = _conversation_only(messages)
@@ -684,7 +985,7 @@ def save_memory(state: GraphState) -> GraphState:
     ts = datetime.now(timezone.utc).isoformat()
     mem_id = uuid.uuid4().hex
 
-    # ── raw 대화 저장 ──
+    # ── raw 대화 저장 (10턴) ──
     raw_doc = Document(
         page_content=raw_text,
         metadata={
@@ -695,6 +996,14 @@ def save_memory(state: GraphState) -> GraphState:
             "message_count": MIN_MSGS,
         },
     )
+
+    delete_messages = [RemoveMessage(id=msg.id) for msg in messages[:MIN_MSGS]]
+    _log(f"🧹 메시지 정리: {MIN_MSGS}개 제거")
+    
+    return {
+        "policy": policy_text,
+        "messages": delete_messages  # add_messages 리듀서가 자동 처리
+    }
 
     def _bg_save_raw():
         try:
@@ -741,7 +1050,14 @@ def save_memory(state: GraphState) -> GraphState:
         policy_text = state.get("policy", "")
 
     _log(f"📋 policy 갱신: {policy_text}")
-    return {"policy": policy_text}
+
+    # ── 저장한 10턴(20개 메시지)을 state.messages에서 제거 ──
+    # add_messages 리듀서: REMOVE_ALL 후 남길 메시지만 다시 넣으면, 이후 context/prompt에 저장분이 포함되지 않음
+    remaining = list(messages[MIN_MSGS:])
+    new_messages = [RemoveMessage(id=REMOVE_ALL_MESSAGES)] + remaining
+    _log(f"🧹 메시지 정리: 저장한 {MIN_MSGS}개 제거, {len(remaining)}개만 유지")
+
+    return {"policy": policy_text, "messages": new_messages}
 
 
 # ============================================================
@@ -826,13 +1142,6 @@ def build_app():
     workflow = StateGraph(GraphState)
 
     # # ── 노드 등록 ──
-    # workflow.add_node("contextualize", contextualize)
-    # workflow.add_node("save_memory", save_memory)
-    # workflow.add_node("retrieve", retrieve)
-    # workflow.add_node("llm_answer", llm_answer)
-    # workflow.add_node("relevance_check", relevance_check)
-    # workflow.add_node("web_search", web_search)
-    # ── 노드 등록 (진입/퇴장 시간 측정 래퍼 적용) ──
     workflow.add_node("contextualize", _timed_node(contextualize, "contextualize"))
     workflow.add_node("save_memory", _timed_node(save_memory, "save_memory"))
     workflow.add_node("retrieve", _timed_node(retrieve, "retrieve"))
@@ -923,3 +1232,63 @@ def get_app():
 def is_initialized() -> bool:
     """파이프라인 초기화 완료 여부"""
     return _initialized
+
+
+def verify_chain_and_lora_config() -> Dict[str, Any]:
+    """
+    체인 생성·LoRA 라우팅 설정이 정상인지 검증 (모델 로드 없이 설정만 검사).
+    - router_model.json centroids 키와 STYLE_MODELS 키 일치 여부
+    - 어댑터 이름 일치 시 set_adapter(style) 정상 동작 가능 여부
+    Returns:
+        {"ok": bool, "checks": {...}, "errors": [...]}
+    """
+    result = {"ok": True, "checks": {}, "errors": []}
+
+    # 1) STYLE_MODELS 키 = 라우터/어댑터에서 쓰는 이름
+    style_keys = set(STYLE_MODELS.keys())
+    result["checks"]["style_keys"] = list(style_keys)
+    if "direct" not in style_keys:
+        result["ok"] = False
+        result["errors"].append("STYLE_MODELS에 'direct'가 없음")
+
+    # 2) router_model.json 존재 및 centroids 키와 STYLE_MODELS 일치
+    if not LORA_ROUTER_PATH.exists():
+        result["checks"]["router_file"] = "없음 (route_style은 direct 반환)"
+    else:
+        try:
+            with open(LORA_ROUTER_PATH, "r") as f:
+                data = json.load(f)
+            centroids = data.get("centroids") or data.get("styles", [])
+            if isinstance(centroids, dict):
+                centroid_keys = set(centroids.keys())
+            else:
+                centroid_keys = set(centroids) if isinstance(centroids, list) else set()
+            result["checks"]["centroid_keys"] = list(centroid_keys)
+            missing_in_router = style_keys - centroid_keys
+            if missing_in_router:
+                result["ok"] = False
+                result["errors"].append(f"router_model에 없는 스타일: {missing_in_router}")
+            extra = centroid_keys - style_keys
+            if extra:
+                result["checks"]["extra_in_router"] = list(extra)
+        except Exception as e:
+            result["ok"] = False
+            result["errors"].append(f"router_model.json 로드 실패: {e}")
+
+    # 3) 초기화 시 첫 어댑터 이름이 "direct"로 로드되므로 route_style("direct") → set_adapter("direct") 일치
+    result["checks"]["adapter_name_note"] = "PeftModel.from_pretrained(..., adapter_name='direct') 사용으로 direct 일치"
+
+    return result
+
+
+if __name__ == "__main__":
+    import sys
+    r = verify_chain_and_lora_config()
+    print("체인·LoRA 설정 검증:", "OK" if r["ok"] else "실패")
+    for k, v in r["checks"].items():
+        print(f"  {k}: {v}")
+    if r["errors"]:
+        for e in r["errors"]:
+            print("  오류:", e)
+        sys.exit(1)
+    print("(실제 체인 생성·어댑터 적용은 initialize() → build_app() → query() 호출 시 수행)")

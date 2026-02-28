@@ -11,11 +11,15 @@ chromadb
 pdfplumber
 python-dotenv
 pypdf
+transformers
 sentence_transformers
 langgraph
 ipywidgets
 tavily-python
 streamlit
+torch
 transformers
 accelerate
 bitsandbytes
+# flash-attn: torch 설치 후 별도 실행 → pip install --no-build-isolation flash-attn
+peft

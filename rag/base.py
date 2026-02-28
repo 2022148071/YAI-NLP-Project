@@ -16,7 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # ⚠️ 적재(ingest)와 검색(retrieve) 시 반드시 동일한 모델을 사용해야 합니다!
 EMBEDDING_MODEL = "BAAI/bge-m3"  # 임베딩 모델명
 EMBEDDING_DEVICE = "auto"                         # "cpu" / "cuda" / "auto"
-ANSWER_MODEL = "Qwen/Qwen2.5-7B-Instruct"
+ANSWER_MODEL = "Qwen/Qwen2.5-14B-Instruct"
 
 
 def _resolve_embedding_device():
