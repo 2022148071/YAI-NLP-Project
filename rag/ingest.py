@@ -9,18 +9,64 @@ Usage:
     from rag.ingest import ingest_pdfs
     ingest_pdfs(["data/nlp.pdf"], persist_directory="./chroma_db")
 
+    # DB 초기화 후 새 데이터 적재
+    from rag.ingest import reset_collection, ingest_pdfs
+    reset_collection(persist_directory="./chroma_db", collection_name="my_collection")
+    ingest_pdfs(["data/nlp.pdf"], persist_directory="./chroma_db", collection_name="my_collection")
+
     # CLI에서 사용
     python -m rag.ingest data/nlp.pdf data/transformer.pdf
+
+    # CLI: 초기화 후 적재
+    python -m rag.ingest --reset data/nlp.pdf data/transformer.pdf
 """
 
+import shutil
+from pathlib import Path
 from langchain_community.document_loaders import PDFPlumberLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from typing import List, Optional, Union
 
-# ⚠️ 임베딩 모델은 base.py에서 중앙 관리 (적재/검색 시 동일 모델 보장)
 from rag.base import create_embedding_auto as create_embedding
+
+
+def reset_collection(
+    persist_directory: str = "./chroma_db",
+    collection_name: str = "default",
+):
+    """
+    ChromaDB 컬렉션을 삭제(초기화)합니다.
+
+    persist_directory 내의 특정 컬렉션만 삭제하거나,
+    디렉토리 자체를 제거하여 전체 초기화합니다.
+    """
+    import chromadb
+
+    persist_path = Path(persist_directory)
+    if not persist_path.exists():
+        print(f"ℹ️ {persist_directory} 가 존재하지 않습니다. 초기화할 내용이 없습니다.")
+        return
+
+    try:
+        client = chromadb.PersistentClient(path=persist_directory)
+        existing = [c.name for c in client.list_collections()]
+        if collection_name in existing:
+            client.delete_collection(collection_name)
+            print(f"🗑️ 컬렉션 '{collection_name}' 삭제 완료")
+        else:
+            print(f"ℹ️ 컬렉션 '{collection_name}'이 존재하지 않습니다.")
+
+        remaining = client.list_collections()
+        if not remaining:
+            del client
+            shutil.rmtree(persist_directory, ignore_errors=True)
+            print(f"🗑️ 빈 DB 디렉토리 삭제: {persist_directory}")
+    except Exception as e:
+        print(f"⚠️ 컬렉션 삭제 중 오류, 디렉토리 전체 삭제로 전환: {e}")
+        shutil.rmtree(persist_directory, ignore_errors=True)
+        print(f"🗑️ DB 디렉토리 전체 삭제 완료: {persist_directory}")
 
 
 def ingest_pdfs(
@@ -157,10 +203,50 @@ def ingest_documents(
 
 if __name__ == "__main__":
     import sys
+    import glob as globmod
 
-    if len(sys.argv) < 2:
-        print("Usage: python -m rag.ingest <pdf_path1> [pdf_path2] ...")
-        print("Example: python -m rag.ingest data/nlp.pdf data/transformer.pdf")
+    args = sys.argv[1:]
+    do_reset = "--reset" in args
+    if do_reset:
+        args.remove("--reset")
+
+    collection = "my_collection"
+    persist_dir = "./chroma_db"
+
+    for i, a in enumerate(args):
+        if a == "--collection" and i + 1 < len(args):
+            collection = args[i + 1]
+            args = args[:i] + args[i + 2:]
+            break
+    for i, a in enumerate(args):
+        if a == "--persist-dir" and i + 1 < len(args):
+            persist_dir = args[i + 1]
+            args = args[:i] + args[i + 2:]
+            break
+
+    expanded = []
+    for a in args:
+        matched = globmod.glob(a)
+        expanded.extend(matched if matched else [a])
+
+    if not expanded:
+        print("Usage: python -m rag.ingest [--reset] [--collection NAME] [--persist-dir DIR] <파일들...>")
+        print("Example: python -m rag.ingest --reset data/*.pdf")
         sys.exit(1)
 
-    ingest_pdfs(sys.argv[1:])
+    if do_reset:
+        print("=" * 50)
+        print("🔄 DB 초기화 시작")
+        print("=" * 50)
+        reset_collection(persist_directory=persist_dir, collection_name=collection)
+
+    pdf_files = [f for f in expanded if f.lower().endswith(".pdf")]
+    txt_files = [f for f in expanded if not f.lower().endswith(".pdf")]
+
+    if pdf_files:
+        print(f"\n📚 PDF 파일 {len(pdf_files)}개 적재 시작...")
+        ingest_pdfs(pdf_files, persist_directory=persist_dir, collection_name=collection)
+
+    if txt_files:
+        print(f"\n📚 텍스트 파일 {len(txt_files)}개 적재 시작...")
+        ingest_documents(file_paths=txt_files, persist_directory=persist_dir, collection_name=collection)

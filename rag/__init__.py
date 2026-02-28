@@ -4,7 +4,7 @@ RAG (Retrieval-Augmented Generation) 모듈
 
 from rag.base import (
     RetrievalChain,
-    create_embedding_local,
+    #create_embedding_local,
     create_embedding_api,
     create_embedding_auto,
     EMBEDDING_MODEL,
